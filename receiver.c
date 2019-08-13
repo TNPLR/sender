@@ -52,12 +52,12 @@ static int send_server_msg(gcry_sexp_t pub_key, int socketfd, int since)
 		*(time_t *)buffer = t;
 
 		fread((char *)buffer + sizeof t, msg_size, 1, ftmp);
-		encrypt_and_send(pub_key, privk, socketfd, msg_size + sizeof t + 1, buffer);
+		encrypt_and_send(socketfd, pub_key, privk, buffer, msg_size + sizeof t);
 		fseek(ftmp, sizeof msg_size, SEEK_CUR);
 		free(buffer);
 		++since;
 	}
-	encrypt_and_send(pub_key, privk, socketfd, sizeof message_done, message_done);
+	encrypt_and_send(socketfd, pub_key, privk, message_done, sizeof message_done);
 	return 0;
 }
 
@@ -124,13 +124,13 @@ static int handler(int socketfd)
 		goto cleanup;
 	}
 
-	if (send_rsa_key(pubk, socketfd)) {
+	if (send_rsa_key(socketfd, pubk)) {
 		serverlog("Cannot send rsa key");
 		ret_val = 4;
 		goto cleanup;
 	}
 
-	if (recv_rsa_key(&pub_key, socketfd)) {
+	if (recv_rsa_key(socketfd, &pub_key)) {
 		ret_val = 4;
 		goto cleanup;
 	}
@@ -230,7 +230,7 @@ int receiver(void)
 	int new_socket, c;
 	c = sizeof(struct sockaddr_in);
 	while ((new_socket = accept(socketfd, (struct sockaddr *)&client, (socklen_t *)&c))) {
-		puts("New Connection");
+		serverlog("New Connection");
 		pid_t cpid = fork();
 		if (cpid == 0) {
 			close(socketfd);

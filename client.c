@@ -44,9 +44,9 @@ static void delete_list(void)
 	free(nd);
 }
 
-static int send_msg_to_server(gcry_sexp_t pub_key, int socketfd, size_t msg_size, const void *s)
+static int send_msg_to_server(int socketfd, gcry_sexp_t pub_key, const void *s, size_t msg_size)
 {
-	return encrypt_and_send(pub_key, privk, socketfd, msg_size, s);
+	return encrypt_and_send(socketfd, pub_key, privk, s, msg_size);
 }
 
 static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, int maxy)
@@ -138,12 +138,12 @@ static int client_protocol(const char *saddr, gcry_sexp_t *pub_key)
 		return -1;
 	}
 
-	if (recv_rsa_key(pub_key, socketfd)) {
+	if (recv_rsa_key(socketfd, pub_key)) {
 		puts("Cannot get rsa key");
 		return -1;
 	}
 
-	if (send_rsa_key(pubk, socketfd)) {
+	if (send_rsa_key(socketfd, pubk)) {
 		puts("Cannot send rsa key");
 		return -1;
 	}
@@ -254,7 +254,8 @@ static int send_proc(const char *saddr)
 				shutdown(socketfd, 2);
 				return 1;
 			}
-			send_msg_to_server(pub_key, socketfd, bf, buffer);
+			buffer[bf++] = '\0';
+			send_msg_to_server(socketfd, pub_key, buffer, bf);
 			wclear(send_win);
 			wborder(send_win, '|', '|', '-','-','+','+','+','+');
 			cur_y = 1;

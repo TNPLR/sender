@@ -89,6 +89,24 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	gcry_check_version(NULL);
+
+	gcry_error_t err;
+	err = gcry_control(GCRYCTL_ENABLE_M_GUARD);
+
+	err |= gcry_control(GCRYCTL_SUSPEND_SECMEM_WARN);
+
+	err |= gcry_control(GCRYCTL_INIT_SECMEM, 16384, 0);
+
+	err |= gcry_control(GCRYCTL_RESUME_SECMEM_WARN);
+
+	err |= gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
+
+	if (err) {
+		puts("Init failed");
+		return -1;
+	}
+
 	if (key_file == NULL) {
 		puts("Please specify key file");
 		return -1;
@@ -115,10 +133,6 @@ int main(int argc, char *argv[])
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 	signal(SIGQUIT, signal_handler);
-
-	gcry_check_version(NULL);
-
-	gcry_control(GCRYCTL_ENABLE_M_GUARD);
 
 	if (r == SERVER) {
 		receiver();

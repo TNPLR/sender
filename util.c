@@ -7,10 +7,19 @@ int recvall(int socketfd, void *buf, size_t buf_size, int flags)
 		puts("Cannot receive message");
 		return -1;
 	}
+
+	if (sz == 0) {
+		puts("Connection closed");
+		return -1;
+	}
 	while ((size_t)sz != buf_size) {
 		ssize_t tmp = recv(socketfd, ((char *)buf + sz), buf_size - sz, flags);
 		if (tmp == -1) {
 			puts("Cannot receive message");
+			return -1;
+		}
+		if (tmp == 0) {
+			puts("Connection closed");
 			return -1;
 		}
 		sz += tmp;
@@ -74,7 +83,7 @@ size_t send_pack(int socketfd, const void *buf, size_t buf_size, int flags)
 	return buf_size;
 }
 
-size_t get_arr_from_sexp(void **ptr, gcry_sexp_t sexp)
+static size_t get_arr_from_sexp(void **ptr, gcry_sexp_t sexp)
 {
 	size_t rsa_key_len = gcry_sexp_sprint(sexp, GCRYSEXP_FMT_CANON, NULL, 0);
 	*ptr = calloc(1, rsa_key_len);
@@ -191,7 +200,7 @@ int read_keypair(gcry_sexp_t *pubk, gcry_sexp_t *privk, const void *file_pos)
 	return 0;
 }
 
-int recv_rsa_key(gcry_sexp_t *pubk_buf, int socketfd)
+int recv_rsa_key(int socketfd, gcry_sexp_t *pubk_buf)
 {
 	size_t keylen;
 	void *buffer;
@@ -211,12 +220,12 @@ int recv_rsa_key(gcry_sexp_t *pubk_buf, int socketfd)
 	return 0;
 }
 
-int send_rsa_key(gcry_sexp_t pubk, int socketfd)
+int send_rsa_key(int socketfd, gcry_sexp_t pub_key)
 {
-	size_t keylen = gcry_sexp_sprint(pubk, GCRYSEXP_FMT_CANON, NULL, 0);
+	size_t keylen = gcry_sexp_sprint(pub_key, GCRYSEXP_FMT_CANON, NULL, 0);
 	void *buffer = calloc(1, keylen);
 
-	gcry_sexp_sprint(pubk, GCRYSEXP_FMT_CANON, buffer, keylen);
+	gcry_sexp_sprint(pub_key, GCRYSEXP_FMT_CANON, buffer, keylen);
 
 	if (send_pack(socketfd, buffer, keylen, 0) == 0) {
 		puts("Send key failed");
@@ -245,8 +254,8 @@ int calculate_hash(void **res, const void *s, size_t s_size)
 	return 0;
 }
 
-int verify_rsa_data(gcry_sexp_t pub_key, size_t plain_len, const void *plain,
-		size_t sign_len, const void *signature)
+static int verify_rsa_data(gcry_sexp_t pub_key, const void *plain, size_t plain_len,
+		const void *signature, size_t sign_len)
 {
 	gcry_mpi_t msg;
 	gcry_sexp_t sig;
@@ -294,7 +303,7 @@ int verify_rsa_data(gcry_sexp_t pub_key, size_t plain_len, const void *plain,
 	return 0;
 }
 
-size_t sign_rsa_data(void **ptr, gcry_sexp_t priv_key, size_t msg_len, const void *s)
+static size_t sign_rsa_data(void **ptr, gcry_sexp_t priv_key, const void *s, size_t msg_len)
 {
 	gcry_mpi_t msg;
 	gcry_sexp_t data;
@@ -342,7 +351,7 @@ size_t sign_rsa_data(void **ptr, gcry_sexp_t priv_key, size_t msg_len, const voi
 	return data_size;
 }
 
-size_t encrypt_rsa_data(void **ptr, gcry_sexp_t pub_key, size_t msg_len, const void *s)
+static size_t encrypt_rsa_data(void **ptr, gcry_sexp_t pub_key, const void *s, size_t msg_len)
 {
 	gcry_mpi_t msg;
 	gcry_sexp_t data;
@@ -386,7 +395,7 @@ size_t encrypt_rsa_data(void **ptr, gcry_sexp_t pub_key, size_t msg_len, const v
 	return data_size;
 }
 
-size_t decrypt_rsa_data(void **ptr, gcry_sexp_t privk, size_t msg_len, const void *s)
+static size_t decrypt_rsa_data(void **ptr, gcry_sexp_t privk, const void *s, size_t msg_len)
 {
 	gcry_sexp_t ciph;
 	gcry_sexp_t plain;
@@ -421,7 +430,7 @@ size_t decrypt_rsa_data(void **ptr, gcry_sexp_t privk, size_t msg_len, const voi
 }
 
 size_t receive_and_decrypt(int socketfd, gcry_sexp_t pub_key,
-		gcry_sexp_t privk, void **plain)
+		gcry_sexp_t priv_key, void **plain)
 {
 	size_t msg_size;
 	struct connect_pack *pk;
@@ -432,14 +441,14 @@ size_t receive_and_decrypt(int socketfd, gcry_sexp_t pub_key,
 		return 0;
 	}
 
-	size_t plain_size = decrypt_rsa_data(plain, privk, pk->buffer_size, pk->ch);
+	size_t plain_size = decrypt_rsa_data(plain, priv_key, pk->ch, pk->buffer_size);
 	if (plain_size == 0) {
 		puts("Decrypt went wrong");
 		free(pk);
 		return 0;
 	}
-	if (verify_rsa_data(pub_key, plain_size, *plain,
-				pk->signature_size, pk->ch + pk->buffer_size)) {
+	if (verify_rsa_data(pub_key, *plain, plain_size,
+				pk->ch + pk->buffer_size, pk->signature_size)) {
 		free(*plain);
 		free(pk);
 		puts("Message signature not correct");
@@ -449,15 +458,15 @@ size_t receive_and_decrypt(int socketfd, gcry_sexp_t pub_key,
 	return plain_size;
 }
 
-int encrypt_and_send(gcry_sexp_t pub_key, gcry_sexp_t priv_key,
-		int socketfd, size_t msg_size, const void *s)
+int encrypt_and_send(int socketfd, gcry_sexp_t pub_key, gcry_sexp_t priv_key,
+		const void *s, size_t msg_size)
 {
 	void *edata;
 	void *sig;
 	size_t edata_size;
 	size_t sig_size;
-	edata_size = encrypt_rsa_data(&edata, pub_key, msg_size, s);
-	sig_size = sign_rsa_data(&sig, priv_key, msg_size, s);
+	edata_size = encrypt_rsa_data(&edata, pub_key, s, msg_size);
+	sig_size = sign_rsa_data(&sig, priv_key, s, msg_size);
 
 	struct connect_pack *pk =
 		calloc(1, sizeof(struct connect_pack) + edata_size + sig_size);

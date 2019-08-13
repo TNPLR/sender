@@ -1,5 +1,13 @@
 #ifndef CSD_H_
 #define CSD_H_
+
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+// getopt
+#include <unistd.h>
+
 #include <stdalign.h>
 #include <string.h>
 #include <stdlib.h>
@@ -23,9 +31,6 @@
 #include <gcrypt.h>
 
 #include <ncurses.h>
-
-// getopt
-#include <unistd.h>
 
 #define LISTEN_PORT 2488
 #define LISTEN_PORT_STR "2488"
@@ -85,19 +90,14 @@ int sendall(int socketfd, const void *buf, size_t buf_size, int flags);
 size_t recv_pack(int socketfd, void **buf, int flags);
 size_t send_pack(int socketfd, const void *buf, size_t buf_size, int flags);
 
-
-size_t get_arr_from_sexp(void **ptr, gcry_sexp_t sexp);
 int keypair_generator(const char *file_pos);
 int read_keypair(gcry_sexp_t *pubk, gcry_sexp_t *privk, const void *file_pos);
-int recv_rsa_key(gcry_sexp_t *pubk_buf, int socketfd);
-int send_rsa_key(gcry_sexp_t pub_key, int socketfd);
-size_t encrypt_data(void **ptr, gcry_sexp_t pub_key,
-		size_t msg_len, const void *s);
-size_t decrypt_data(void **ptr, gcry_sexp_t privk, size_t msg_len, const void *s);
-size_t receive_and_decrypt(int socketfd, gcry_sexp_t pubk,
-		gcry_sexp_t privk, void **plain);
-int encrypt_and_send(gcry_sexp_t pubk, gcry_sexp_t priv_key,
-		int socketfd, size_t msg_size, const void *s);
+int recv_rsa_key(int socketfd, gcry_sexp_t *pubk_buf);
+int send_rsa_key(int socketfd, gcry_sexp_t pub_key);
+size_t receive_and_decrypt(int socketfd, gcry_sexp_t pub_key,
+		gcry_sexp_t priv_key, void **plain);
+int encrypt_and_send(int socketfd, gcry_sexp_t pub_key, gcry_sexp_t priv_key,
+		const void *s, size_t msg_size);
 
 // receiver.c
 int receiver(void);
