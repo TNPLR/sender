@@ -10,7 +10,7 @@
 GDBM_FILE gdbm_file;
 int init_gdbm(void)
 {
-	gdbm_file = gdbm_open("receive.mdg", 0, GDBM_NEWDB, O_RDWR | O_CREAT | O_TRUNC, NULL);
+	gdbm_file = gdbm_open("receiver.mdg", 0, GDBM_NEWDB, O_RDWR | O_CREAT | O_TRUNC, NULL);
 	if (gdbm_file == NULL) {
 		printf("Cannot create data base: gdbm: %s\n", gdbm_strerror(gdbm_errno));
 		return -1;
@@ -77,12 +77,12 @@ static void serverlog(const char *msg)
 // Message
 // Message Size
 // send to client
-static int send_server_msg(gcry_sexp_t pub_key, int socketfd, int count)
+static int send_server_msg(gcry_sexp_t pub_key, int socketfd)
 {
-	count = 8;
+	uint32_t count = 8;
 	gdbm_count_t server_msg_count;
 	if (gdbm_count(gdbm_file, &server_msg_count)) {
-	puts("Cannot count record");
+		puts("Cannot count record");
 		return -1;
 	}
 
@@ -90,11 +90,16 @@ static int send_server_msg(gcry_sexp_t pub_key, int socketfd, int count)
 		count = server_msg_count;
 	}
 
+	if (sendall(socketfd, &count, sizeof count, 0)) {
+		serverlog("Cannot send count");
+		return -1;
+	}
+
 	for (gdbm_count_t i = server_msg_count - count + 1; i <= server_msg_count; ++i) {
 		datum buffer = fetch_msg(i);
 		struct message *msg = (struct message *)buffer.dptr;
 		if (msg == NULL) {
-			break;
+			assert(0);
 		}
 #if DEBUG == 2
 		printf("%s:%d\n", msg->s, buffer.dsize);
@@ -103,7 +108,7 @@ static int send_server_msg(gcry_sexp_t pub_key, int socketfd, int count)
 
 		free(buffer.dptr);
 	}
-	encrypt_and_send(socketfd, pub_key, privk, message_done, sizeof message_done);
+
 	return 0;
 }
 
@@ -134,77 +139,6 @@ static int add_server_msg(int socketfd, gcry_sexp_t pubk)
 	gcry_free(plain);
 	return 0;
 }
-
-static int old_send_server_msg(gcry_sexp_t pub_key, int socketfd, int since)
-{
-	fseek(ftmp, 0, SEEK_SET);
-	uint32_t server_msg_count;
-	fread(&server_msg_count, sizeof server_msg_count, 1, ftmp);
-
-	uint32_t reverse_count = server_msg_count > 8 ? 8 : server_msg_count;
-
-	fseek(ftmp, 0, SEEK_END);
-	for (uint32_t i = 0; i < reverse_count; ++i) {
-		size_t msg_size;
-		fseek(ftmp, -(long int)sizeof msg_size, SEEK_CUR);
-		fread(&msg_size, sizeof msg_size, 1, ftmp);
-		fseek(ftmp, -(msg_size + ((sizeof msg_size) << 1) + sizeof(time_t)), SEEK_CUR);
-	}
-
-	for (uint32_t i = 0; i < reverse_count; ++i) {
-		// Send the Number of This Message first
-		time_t t;
-		fread(&t, sizeof t, 1, ftmp);
-
-		size_t msg_size;
-		fread(&msg_size, sizeof msg_size, 1, ftmp);
-
-		void *buffer = calloc(1, msg_size + sizeof t + 1);
-		if (buffer == NULL) {
-			serverlog("Cannot alloc memory");
-			return -1;
-		}
-
-		*(time_t *)buffer = t;
-
-		fread((char *)buffer + sizeof t, msg_size, 1, ftmp);
-		encrypt_and_send(socketfd, pub_key, privk, buffer, msg_size + sizeof t);
-		fseek(ftmp, sizeof msg_size, SEEK_CUR);
-		free(buffer);
-	}
-	encrypt_and_send(socketfd, pub_key, privk, message_done, sizeof message_done);
-	return 0;
-}
-
-static int old_add_server_msg(int socketfd, gcry_sexp_t pubk)
-{
-	fseek(ftmp, 0, SEEK_SET);
-	uint32_t server_msg_count;
-	fread(&server_msg_count, sizeof server_msg_count, 1, ftmp);
-
-	fseek(ftmp, 0, SEEK_END);
-
-	void *plain;
-	size_t plain_size = receive_and_decrypt(socketfd, pubk, privk, &plain);
-	if (plain_size == 0) {
-		serverlog("Cannot receive or decrypt");
-		return -1;
-	}
-	++server_msg_count;
-
-	time_t t = time(NULL);
-	fwrite(&t, sizeof t, 1, ftmp);
-	fwrite(&plain_size, sizeof plain_size, 1, ftmp);
-	fwrite(plain, plain_size, 1, ftmp);
-	fwrite(&plain_size, sizeof plain_size, 1, ftmp);
-
-	fseek(ftmp, 0, SEEK_SET);
-	fwrite(&server_msg_count, sizeof server_msg_count, 1, ftmp);
-	serverlog(plain);
-	gcry_free(plain);
-	return 0;
-}
-
 /*
  * return value
  * 0 normal exit
@@ -258,16 +192,10 @@ static int handler(int socketfd)
 			goto cleanup;
 		}
 
-		int since;
 		switch (rq) {
 		case GET_MSG:
 			serverlog("GET_MSG");
-			if (recvall(socketfd, &since, sizeof since, 0)) {
-				serverlog("Cannot receive since num");
-				ret_val = 6;
-				goto cleanup;
-			}
-			send_server_msg(pub_key, socketfd, since);
+			send_server_msg(pub_key, socketfd);
 			break;
 		case SEND_MSG:
 			serverlog("SEND_MSG");

@@ -10,6 +10,7 @@
 
 #include <sys/types.h>
 
+#include <assert.h>
 #include <stdalign.h>
 #include <string.h>
 #include <stdlib.h>

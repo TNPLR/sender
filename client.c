@@ -1,49 +1,6 @@
 #include "csd.h"
 
-static int current_msg = 0;
-
-static struct list {
-	struct list_nd *head;
-	struct list_nd *tail;
-} global_list;
-
-struct list_nd {
-	struct list_nd *prev;
-	size_t msg_size;
-	void *buf;
-	struct list_nd *next;
-};
-
-static void append_list(size_t s_size, const void *s)
-{
-	struct list_nd *nd = malloc(sizeof(struct list_nd));
-	nd->buf = malloc(s_size);
-	nd->msg_size = s_size;
-	memcpy(nd->buf, s, s_size);
-
-	nd->next = NULL;
-	nd->prev = global_list.tail;
-
-	if (global_list.head == NULL) {
-		global_list.head = nd;
-	} else {
-		global_list.tail->next = nd;
-	}
-	global_list.tail = nd;
-}
-
-static void delete_list(void)
-{
-	struct list_nd *nd = global_list.head;
-	while (nd->next != NULL) {
-		free(nd->prev);
-		free(nd->buf);
-		nd = nd->next;
-	}
-	free(nd->buf);
-	free(nd);
-}
-
+uintmax_t message_count;
 static int send_msg_to_server(int socketfd, gcry_sexp_t pub_key, const void *s, size_t msg_size)
 {
 	return encrypt_and_send(socketfd, pub_key, privk, s, msg_size);
@@ -53,19 +10,21 @@ static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, in
 {
 	int y = 0;
 
+	uint32_t count;
+
+	if (recvall(socketfd, &count, sizeof count, 0)) {
+		puts("Cannot receive count");
+		return -1;
+	}
+
 	werase(win);
-	while (1) {
+
+	for (uint32_t i = 0; i < count; ++i) {
 		void *plain;
 		size_t length;
 
 		if (!(length = receive_and_decrypt(socketfd, pub_key, privk, &plain))) {
-			continue;
-		}
-
-		if (length == sizeof message_done) {
-			if (!memcmp(message_done, plain, sizeof message_done)) {
-				break;
-			}
+			break;
 		}
 
 		//append_list(length, plain);
@@ -75,10 +34,10 @@ static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, in
 		}
 
 		char buffer[64];
+		++message_count;
 		strftime(buffer, 64, "%Ec", localtime(&((struct message *)plain)->tm));
 		mvwprintw(win, y, 0, "[%s] %s", buffer, ((struct message *)plain)->s);
 		y += 3;
-		++current_msg;
 		gcry_free(plain);
 	}
 	wrefresh(win);
@@ -176,10 +135,6 @@ static int message_proc(int socketfd, gcry_sexp_t pub_key, WINDOW *win, int maxy
 
 	if (sendall(socketfd, &rq, sizeof rq, 0)) {
 		puts("Cannot send GET_MSG");
-		return 1;
-	}
-	if (sendall(socketfd, &current_msg, sizeof current_msg, 0)) {
-		puts("Cannot send CURRENT_MSG");
 		return 1;
 	}
 	receive_server_msg(socketfd, pub_key, win, maxy);
@@ -308,10 +263,6 @@ int tui_client(const char *saddr)
 	noecho();
 
 	keypad(stdscr, TRUE);
-
-
-	global_list.head = NULL;
-	global_list.tail = NULL;
 
 	send_proc(saddr);
 
