@@ -8,6 +8,8 @@
 // getopt
 #include <unistd.h>
 
+#include <sys/types.h>
+
 #include <stdalign.h>
 #include <string.h>
 #include <stdlib.h>
@@ -20,8 +22,6 @@
 #include <locale.h>
 
 #include <sys/socket.h>
-
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
 
@@ -75,6 +75,14 @@ struct connect_pack {
 	alignas(8) size_t signature_size;
 	alignas(4) uint32_t attribute;
 	char ch[];
+};
+
+struct message {
+	uint32_t msg_num;
+	char username[16];
+	time_t tm;
+	size_t msg_size;
+	char s[];
 };
 
 // main.c

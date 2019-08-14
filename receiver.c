@@ -1,5 +1,61 @@
 #include "csd.h"
 
+#include <fcntl.h>
+
+// Database
+#include <gdbm.h>
+
+
+
+GDBM_FILE gdbm_file;
+int init_gdbm(void)
+{
+	gdbm_file = gdbm_open("receive.mdg", 0, GDBM_NEWDB, O_RDWR | O_CREAT | O_TRUNC, NULL);
+	if (gdbm_file == NULL) {
+		printf("Cannot create data base: gdbm: %s\n", gdbm_strerror(gdbm_errno));
+		return -1;
+	}
+	return 0;
+}
+
+void close_gdbm(void)
+{
+	gdbm_close(gdbm_file);
+}
+
+int store_msg(struct message *m)
+{
+	datum key_datum;
+	datum data_datum;
+
+	key_datum.dptr = (void *)&m->msg_num;
+	key_datum.dsize = sizeof m->msg_num;
+
+	data_datum.dptr = (void *)m;
+	data_datum.dsize = sizeof *m + m->msg_size;
+
+	if (gdbm_store(gdbm_file, key_datum, data_datum, GDBM_REPLACE)) {
+		puts("Cannot store data");
+		return -1;
+	}
+	gdbm_sync(gdbm_file);
+	return 0;
+}
+
+datum fetch_msg(uint32_t msg_num)
+{
+	datum key_datum;
+	datum data_datum;
+
+	key_datum.dptr = (void *)&msg_num;
+	key_datum.dsize = sizeof msg_num;
+	data_datum = gdbm_fetch(gdbm_file, key_datum);
+	if (data_datum.dptr == NULL) {
+		printf("Cannot fetch data: gdbm: %s\n", gdbm_strerror(gdbm_errno));
+	}
+	return data_datum;
+}
+
 /* RSA Crypto */
 
 static struct sockaddr_storage client;
@@ -16,27 +72,87 @@ static void serverlog(const char *msg)
 	strftime(buffer, 32, "%Ec", gmtime(&t));
 	printf("[%s] %s\n", buffer, msg);
 }
-
 // Message format:
-// Message Time
 // Message Size
 // Message
 // Message Size
 // send to client
-static int send_server_msg(gcry_sexp_t pub_key, int socketfd, int since)
+static int send_server_msg(gcry_sexp_t pub_key, int socketfd, int count)
 {
-	fseek(ftmp, 0, SEEK_SET);
-	int server_msg_count;
-	fread(&server_msg_count, sizeof server_msg_count, 1, ftmp);
-	for (int i = 0; i < since; ++i) {
-		fseek(ftmp, sizeof(time_t), SEEK_CUR);
-		size_t msg_size;
-
-		fread(&msg_size, sizeof msg_size, 1, ftmp);
-		fseek(ftmp, msg_size + sizeof msg_size, SEEK_CUR);
+	count = 8;
+	gdbm_count_t server_msg_count;
+	if (gdbm_count(gdbm_file, &server_msg_count)) {
+	puts("Cannot count record");
+		return -1;
 	}
 
-	while (since < server_msg_count) {
+	if ((gdbm_count_t)count > server_msg_count) {
+		count = server_msg_count;
+	}
+
+	for (gdbm_count_t i = server_msg_count - count + 1; i <= server_msg_count; ++i) {
+		datum buffer = fetch_msg(i);
+		struct message *msg = (struct message *)buffer.dptr;
+		if (msg == NULL) {
+			break;
+		}
+#if DEBUG == 2
+		printf("%s:%d\n", msg->s, buffer.dsize);
+#endif
+		encrypt_and_send(socketfd, pub_key, privk, buffer.dptr, buffer.dsize);
+
+		free(buffer.dptr);
+	}
+	encrypt_and_send(socketfd, pub_key, privk, message_done, sizeof message_done);
+	return 0;
+}
+
+static int add_server_msg(int socketfd, gcry_sexp_t pubk)
+{
+	gdbm_count_t server_msg_count;
+	if (gdbm_count(gdbm_file, &server_msg_count)) {
+		puts("Cannot count record");
+		return -1;
+	}
+
+	void *plain;
+	size_t plain_size = receive_and_decrypt(socketfd, pubk, privk, &plain);
+	if (plain_size == 0) {
+		serverlog("Cannot receive or decrypt");
+		return -1;
+	}
+
+	struct message *m = calloc(1, sizeof(struct message) + plain_size);
+	m->msg_num = server_msg_count + 1;
+	m->tm = time(NULL);
+	m->msg_size = plain_size;
+	memcpy(m->s, plain, plain_size);
+	store_msg(m);
+	free(m);
+
+	serverlog(plain);
+	gcry_free(plain);
+	return 0;
+}
+
+static int old_send_server_msg(gcry_sexp_t pub_key, int socketfd, int since)
+{
+	fseek(ftmp, 0, SEEK_SET);
+	uint32_t server_msg_count;
+	fread(&server_msg_count, sizeof server_msg_count, 1, ftmp);
+
+	uint32_t reverse_count = server_msg_count > 8 ? 8 : server_msg_count;
+
+	fseek(ftmp, 0, SEEK_END);
+	for (uint32_t i = 0; i < reverse_count; ++i) {
+		size_t msg_size;
+		fseek(ftmp, -(long int)sizeof msg_size, SEEK_CUR);
+		fread(&msg_size, sizeof msg_size, 1, ftmp);
+		fseek(ftmp, -(msg_size + ((sizeof msg_size) << 1) + sizeof(time_t)), SEEK_CUR);
+	}
+
+	for (uint32_t i = 0; i < reverse_count; ++i) {
+		// Send the Number of This Message first
 		time_t t;
 		fread(&t, sizeof t, 1, ftmp);
 
@@ -55,23 +171,19 @@ static int send_server_msg(gcry_sexp_t pub_key, int socketfd, int since)
 		encrypt_and_send(socketfd, pub_key, privk, buffer, msg_size + sizeof t);
 		fseek(ftmp, sizeof msg_size, SEEK_CUR);
 		free(buffer);
-		++since;
 	}
 	encrypt_and_send(socketfd, pub_key, privk, message_done, sizeof message_done);
 	return 0;
 }
 
-static int add_server_msg(int socketfd, gcry_sexp_t pubk)
+static int old_add_server_msg(int socketfd, gcry_sexp_t pubk)
 {
 	fseek(ftmp, 0, SEEK_SET);
-	int server_msg_count;
+	uint32_t server_msg_count;
 	fread(&server_msg_count, sizeof server_msg_count, 1, ftmp);
-	for (int i = 0; i < server_msg_count; ++i) {
-		fseek(ftmp, sizeof(time_t), SEEK_CUR);
-		size_t msg_size;
-		fread(&msg_size, sizeof msg_size, 1, ftmp);
-		fseek(ftmp, msg_size + sizeof msg_size, SEEK_CUR);
-	}
+
+	fseek(ftmp, 0, SEEK_END);
+
 	void *plain;
 	size_t plain_size = receive_and_decrypt(socketfd, pubk, privk, &plain);
 	if (plain_size == 0) {
@@ -181,6 +293,15 @@ static void clean_addrinfo(void)
 }
 int receiver(void)
 {
+	if (init_gdbm()) {
+		return -1;
+	}
+
+	/*if (atexit(close_gdbm)) {
+		puts("Cannot load exit function");
+		return -1;
+	}*/
+
 	struct addrinfo hints = {0};
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;

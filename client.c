@@ -51,23 +51,22 @@ static int send_msg_to_server(int socketfd, gcry_sexp_t pub_key, const void *s, 
 
 static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, int maxy)
 {
-	static int y = 0;
+	int y = 0;
+
+	werase(win);
 	while (1) {
 		void *plain;
 		size_t length;
-		time_t t;
 
 		if (!(length = receive_and_decrypt(socketfd, pub_key, privk, &plain))) {
-			break;
+			continue;
 		}
 
 		if (length == sizeof message_done) {
 			if (!memcmp(message_done, plain, sizeof message_done)) {
-				return 0;
+				break;
 			}
 		}
-
-		t = *(time_t *)plain;
 
 		//append_list(length, plain);
 		if (y + 3 > maxy - 5) {
@@ -76,13 +75,13 @@ static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, in
 		}
 
 		char buffer[64];
-		strftime(buffer, 64, "%Ec", localtime(&t));
-		mvwprintw(win, y, 0, "[%s] %s", buffer, (char *)plain + sizeof t);
+		strftime(buffer, 64, "%Ec", localtime(&((struct message *)plain)->tm));
+		mvwprintw(win, y, 0, "[%s] %s", buffer, ((struct message *)plain)->s);
 		y += 3;
-		wrefresh(win);
 		++current_msg;
 		gcry_free(plain);
 	}
+	wrefresh(win);
 	return 0;
 }
 

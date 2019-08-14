@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-ggdb -Wall -Wextra `pkg-config --cflags --libs ncurses` -lpthread -lgcrypt
+CFLAGS=-ggdb -Wall -Wextra `pkg-config --cflags --libs ncurses` -lpthread -lgcrypt -lgdbm
 .PHONY: all clean
 all: main
 main: client.o main.o receiver.o util.o

@@ -447,11 +447,12 @@ size_t receive_and_decrypt(int socketfd, gcry_sexp_t pub_key,
 		free(pk);
 		return 0;
 	}
+
 	if (verify_rsa_data(pub_key, *plain, plain_size,
 				pk->ch + pk->buffer_size, pk->signature_size)) {
-		free(*plain);
-		free(pk);
 		puts("Message signature not correct");
+		gcry_free(*plain);
+		free(pk);
 		return 0;
 	}
 	free(pk);
@@ -475,6 +476,9 @@ int encrypt_and_send(int socketfd, gcry_sexp_t pub_key, gcry_sexp_t priv_key,
 	pk->attribute = 0;
 	memcpy(pk->ch, edata, edata_size);
 	memcpy(pk->ch + edata_size, sig, sig_size);
+#if DEBUG == 2
+	printf("Encrypt Size %lu Sign size %lu\n", edata_size, sig_size);
+#endif
 
 	if (send_pack(socketfd, pk, sizeof(struct connect_pack) + edata_size + sig_size, 0) == 0) {
 		free(edata);
