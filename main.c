@@ -55,10 +55,11 @@ int main(int argc, char *argv[])
 	enum r_mode r = CLIENT;
 	enum k_mode k = READ_KEY;
 	int c;
-	const char *ip_addr;
+	const char *ip_addr = NULL;
 	const char *key_file = NULL;
+	const char *username = NULL;
 	int port;
-	while ((c = getopt(argc, argv, "chsa:p:gf:t")) != -1) {
+	while ((c = getopt(argc, argv, "chsa:p:gf:tu:")) != -1) {
 		switch (c) {
 		case 'c':
 			r = CLIENT;
@@ -80,6 +81,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'f':
 			key_file = optarg;
+			break;
+		case 'u':
+			username = optarg;
 			break;
 		case '\?':
 			puts("Error while reading arguments");
@@ -111,7 +115,6 @@ int main(int argc, char *argv[])
 		puts("Please specify key file");
 		return -1;
 	}
-
 	// Get our keypair
 	if (k == READ_KEY) {
 		if (read_keypair(&pubk, &privk, key_file)) {
@@ -137,7 +140,15 @@ int main(int argc, char *argv[])
 	if (r == SERVER) {
 		receiver();
 	} else if (r == CLIENT) {
-		tui_client(ip_addr);
+		if (username == NULL) {
+			puts("Please specify username");
+			return -1;
+		}
+		if (ip_addr == NULL) {
+			puts("Please specify ip address or hostname");
+			return -1;
+		}
+		tui_client(username, ip_addr);
 	}
 	return 0;
 }

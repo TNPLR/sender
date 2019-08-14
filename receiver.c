@@ -5,25 +5,60 @@
 // Database
 #include <gdbm.h>
 
+static GDBM_FILE gdbm_data;
+static GDBM_FILE gdbm_key;
 
-
-GDBM_FILE gdbm_file;
-int init_gdbm(void)
+static int init_msg_gdbm(void)
 {
-	gdbm_file = gdbm_open("receiver.mdg", 0, GDBM_NEWDB, O_RDWR | O_CREAT | O_TRUNC, NULL);
-	if (gdbm_file == NULL) {
+	gdbm_data = gdbm_open("data.mdg", 0, GDBM_NEWDB, O_RDWR | O_CREAT | O_TRUNC, NULL);
+	if (gdbm_data == NULL) {
 		printf("Cannot create data base: gdbm: %s\n", gdbm_strerror(gdbm_errno));
 		return -1;
 	}
 	return 0;
 }
 
-void close_gdbm(void)
+static int init_key_gdbm(void)
 {
-	gdbm_close(gdbm_file);
+	gdbm_key = gdbm_open("key.mdg", 0, GDBM_NEWDB, O_RDWR | O_CREAT | O_TRUNC, NULL);
+	if (gdbm_key == NULL) {
+		printf("Cannot create data base: gdbm: %s\n", gdbm_strerror(gdbm_errno));
+		return -1;
+	}
+	return 0;
 }
 
-int store_msg(struct message *m)
+static void close_msg_gdbm(void)
+{
+	gdbm_close(gdbm_data);
+}
+
+static void close_key_gdbm(void)
+{
+	gdbm_close(gdbm_key);
+}
+
+static int store_key(char *name, size_t name_len, gcry_sexp_t pubkey)
+{
+	datum key_datum;
+	datum data_datum;
+
+	key_datum.dptr = name;
+	key_datum.dsize = name_len;
+
+	data_datum.dsize = get_arr_from_sexp((void **)&data_datum.dptr, pubkey);
+
+	if (gdbm_store(gdbm_key, key_datum, data_datum, GDBM_REPLACE)) {
+		free(data_datum.dptr);
+		puts("Cannot store data");
+		return -1;
+	}
+	gdbm_sync(gdbm_key);
+	free(data_datum.dptr);
+	return 0;
+}
+
+static int store_msg(struct message *m)
 {
 	datum key_datum;
 	datum data_datum;
@@ -34,22 +69,45 @@ int store_msg(struct message *m)
 	data_datum.dptr = (void *)m;
 	data_datum.dsize = sizeof *m + m->msg_size;
 
-	if (gdbm_store(gdbm_file, key_datum, data_datum, GDBM_REPLACE)) {
+	if (gdbm_store(gdbm_data, key_datum, data_datum, GDBM_REPLACE)) {
 		puts("Cannot store data");
 		return -1;
 	}
-	gdbm_sync(gdbm_file);
+	gdbm_sync(gdbm_data);
 	return 0;
 }
 
-datum fetch_msg(uint32_t msg_num)
+static int fetch_key(gcry_sexp_t *pub_key, char *name, size_t name_len)
+{
+	datum key_datum;
+	datum data_datum;
+
+	key_datum.dptr = name;
+	key_datum.dsize = name_len;
+	data_datum = gdbm_fetch(gdbm_key, key_datum);
+	if (data_datum.dptr == NULL) {
+		printf("Cannot fetch data: gdbm: %s\n", gdbm_strerror(gdbm_errno));
+		return -1;
+	}
+
+	gcry_error_t err;
+	err = gcry_sexp_new(pub_key, data_datum.dptr, data_datum.dsize, 0);
+	if (err) {
+		puts("Cannot generate pubkey from datun");
+		return 1;
+	}
+	free(data_datum.dptr);
+	return 0;
+}
+
+static datum fetch_msg(uint32_t msg_num)
 {
 	datum key_datum;
 	datum data_datum;
 
 	key_datum.dptr = (void *)&msg_num;
 	key_datum.dsize = sizeof msg_num;
-	data_datum = gdbm_fetch(gdbm_file, key_datum);
+	data_datum = gdbm_fetch(gdbm_data, key_datum);
 	if (data_datum.dptr == NULL) {
 		printf("Cannot fetch data: gdbm: %s\n", gdbm_strerror(gdbm_errno));
 	}
@@ -59,11 +117,6 @@ datum fetch_msg(uint32_t msg_num)
 /* RSA Crypto */
 
 static struct sockaddr_storage client;
-static FILE *ftmp;
-static void close_tmp(void)
-{
-	fclose(ftmp);
-}
 
 static void serverlog(const char *msg)
 {
@@ -72,16 +125,12 @@ static void serverlog(const char *msg)
 	strftime(buffer, 32, "%Ec", gmtime(&t));
 	printf("[%s] %s\n", buffer, msg);
 }
-// Message format:
-// Message Size
-// Message
-// Message Size
-// send to client
+
 static int send_server_msg(gcry_sexp_t pub_key, int socketfd)
 {
 	uint32_t count = 8;
 	gdbm_count_t server_msg_count;
-	if (gdbm_count(gdbm_file, &server_msg_count)) {
+	if (gdbm_count(gdbm_data, &server_msg_count)) {
 		puts("Cannot count record");
 		return -1;
 	}
@@ -115,7 +164,7 @@ static int send_server_msg(gcry_sexp_t pub_key, int socketfd)
 static int add_server_msg(int socketfd, gcry_sexp_t pubk)
 {
 	gdbm_count_t server_msg_count;
-	if (gdbm_count(gdbm_file, &server_msg_count)) {
+	if (gdbm_count(gdbm_data, &server_msg_count)) {
 		puts("Cannot count record");
 		return -1;
 	}
@@ -148,7 +197,7 @@ static int add_server_msg(int socketfd, gcry_sexp_t pubk)
  */
 static int handler(int socketfd)
 {
-	char buf[MAGIC_BUF_SIZE];
+	char buf[64];
 	gcry_sexp_t pub_key;
 	int ret_val;
 
@@ -181,6 +230,26 @@ static int handler(int socketfd)
 		goto cleanup;
 	}
 
+	gcry_randomize(buf, 64, GCRY_VERY_STRONG_RANDOM);
+	if (encrypt_and_send(socketfd, pub_key, privk, buf, 64)) {
+		serverlog("Cannot send random message");
+		ret_val = 8;
+		goto cleanup;
+	}
+
+	void *back;
+	size_t sz;
+	if (!(sz = receive_and_decrypt(socketfd, pub_key, privk, &back))) {
+		serverlog("Cannot receive random message");
+		ret_val = 8;
+		goto cleanup;
+	}
+
+	if (sz != 64 || memcmp(buf, back, 64)) {
+		serverlog("Message wrong");
+		ret_val = 8;
+		goto cleanup;
+	}
 
 	while (1) {
 		// Check Request type
@@ -210,6 +279,7 @@ static int handler(int socketfd)
 cleanup:
 	serverlog("Disconnect");
 	gcry_sexp_release(pub_key);
+	gcry_free(back);
 	shutdown(socketfd, 2);
 	return ret_val;
 }
@@ -221,14 +291,14 @@ static void clean_addrinfo(void)
 }
 int receiver(void)
 {
-	if (init_gdbm()) {
+	if (init_msg_gdbm()) {
 		return -1;
 	}
 
-	/*if (atexit(close_gdbm)) {
+	if (atexit(close_msg_gdbm)) {
 		puts("Cannot load exit function");
 		return -1;
-	}*/
+	}
 
 	struct addrinfo hints = {0};
 	hints.ai_family = AF_UNSPEC;
@@ -252,20 +322,6 @@ int receiver(void)
 		return -1;
 	}
 
-	ftmp = fopen("receiver.msg", "wb+");
-	if (ftmp == NULL) {
-		puts("Cannot create tmp file");
-		return -1;
-	}
-
-	if (atexit(close_tmp)) {
-		puts("Cannot load exit function");
-		return -1;
-	}
-
-	int server_msg_count = 0;
-	fwrite(&server_msg_count, sizeof server_msg_count, 1, ftmp);
-
 	if (bind(socketfd, server->ai_addr, server->ai_addrlen)) {
 		puts("Could not bind address");
 		return -1;
@@ -288,6 +344,5 @@ int receiver(void)
 		}
 		close(new_socket);
 	}
-	fclose(ftmp);
 	return 0;
 }

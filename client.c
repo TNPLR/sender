@@ -50,7 +50,7 @@ static void clean_addrinfo(void)
 {
 	freeaddrinfo(server_addr);
 }
-static int client_protocol(const char *saddr, gcry_sexp_t *pub_key)
+static int client_protocol(const char *username, const char *saddr, gcry_sexp_t *pub_key)
 {
 	struct addrinfo hints = {0};
 	hints.ai_family = AF_UNSPEC;
@@ -105,6 +105,20 @@ static int client_protocol(const char *saddr, gcry_sexp_t *pub_key)
 		puts("Cannot send rsa key");
 		return -1;
 	}
+
+	void *rand_msg;
+	size_t sz;
+	if (!(sz = receive_and_decrypt(socketfd, *pub_key, privk, &rand_msg))) {
+		puts("Cannot receive random message");
+		return -1;
+	}
+
+	if (encrypt_and_send(socketfd, *pub_key, privk, rand_msg, sz)) {
+		puts("Cannot send back random message");
+		return -1;
+	}
+
+	gcry_free(rand_msg);
 	return socketfd;
 }
 
@@ -142,7 +156,7 @@ static int message_proc(int socketfd, gcry_sexp_t pub_key, WINDOW *win, int maxy
 	return 0;
 }
 
-static int send_proc(const char *saddr)
+static int send_proc(const char *username, const char *saddr)
 {
 	int maxy, maxx;
 	getmaxyx(stdscr, maxy, maxx);
@@ -161,7 +175,7 @@ static int send_proc(const char *saddr)
 	int cur_y = 1, cur_x = 1;
 	refresh();
 
-	int socketfd = client_protocol(saddr, &pub_key);
+	int socketfd = client_protocol(username, saddr, &pub_key);
 	if (socketfd == -1) {
 		puts("Cannot Protocol");
 		destroy_win(send_win);
@@ -253,7 +267,7 @@ static int send_proc(const char *saddr)
 	return 1;
 }
 
-int tui_client(const char *saddr)
+int tui_client(const char *username, const char *saddr)
 {
 	atexit(cleanup_key);
 
@@ -264,7 +278,7 @@ int tui_client(const char *saddr)
 
 	keypad(stdscr, TRUE);
 
-	send_proc(saddr);
+	send_proc(username, saddr);
 
 	endwin();
 	return 0;

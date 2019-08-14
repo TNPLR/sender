@@ -83,7 +83,7 @@ size_t send_pack(int socketfd, const void *buf, size_t buf_size, int flags)
 	return buf_size;
 }
 
-static size_t get_arr_from_sexp(void **ptr, gcry_sexp_t sexp)
+size_t get_arr_from_sexp(void **ptr, gcry_sexp_t sexp)
 {
 	size_t rsa_key_len = gcry_sexp_sprint(sexp, GCRYSEXP_FMT_CANON, NULL, 0);
 	*ptr = calloc(1, rsa_key_len);

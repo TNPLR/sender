@@ -80,7 +80,7 @@ struct connect_pack {
 
 struct message {
 	uint32_t msg_num;
-	char username[16];
+	char username[24];
 	time_t tm;
 	size_t msg_size;
 	char s[];
@@ -99,6 +99,8 @@ int sendall(int socketfd, const void *buf, size_t buf_size, int flags);
 size_t recv_pack(int socketfd, void **buf, int flags);
 size_t send_pack(int socketfd, const void *buf, size_t buf_size, int flags);
 
+size_t get_arr_from_sexp(void **ptr, gcry_sexp_t sexp);
+
 int keypair_generator(const char *file_pos);
 int read_keypair(gcry_sexp_t *pubk, gcry_sexp_t *privk, const void *file_pos);
 int recv_rsa_key(int socketfd, gcry_sexp_t *pubk_buf);
@@ -112,5 +114,5 @@ int encrypt_and_send(int socketfd, gcry_sexp_t pub_key, gcry_sexp_t priv_key,
 int receiver(void);
 
 // client.c
-int tui_client(const char *saddr);
+int tui_client(const char *username, const char *saddr);
 #endif // CSD_H_
