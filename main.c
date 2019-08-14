@@ -1,5 +1,7 @@
 #include "csd.h"
 
+#include <getopt.h>
+
 gcry_sexp_t pubk;
 gcry_sexp_t privk;
 const char recv_magic[MAGIC_BUF_SIZE] = {0xe5, 0xbc, 0xb5, 0xe8, 0x8a, 0xb8, 0xe5,
@@ -19,13 +21,17 @@ enum k_mode {
 
 static int print_help(void)
 {
-	puts("-h\t\tprint help page\n"
-			"-c\t\tclient mode\n"
-			"-s\t\tserver mode\n"
-			"-a address\tset connect address\n"
-			"-g\t\tkey generation mode\n"
-			"-f file\t\tset keyfile\n"
-			"-v\t\tverbose server message");
+	puts("sender version "VERSION"\n"
+			"-h\t--help\t\t\tprint help page\n"
+			"-c\t--client\t\tclient mode\n"
+			"-s\t--server\t\tserver mode\n"
+			"-a\t--address <address>\tset connect address\n"
+			"-g\t--genkey\t\tkey generation mode\n"
+			"-f\t--file <file>\t\tset keyfile\n"
+			"-u\t--user <username>\tset username\n" 
+			"-r\t--readonly\t\tServer public key Read Only\n"
+			"-w\t--write\t\t\tWrite new key if the user is unknown\n"
+			"-W\t--always-write\t\tWrite new key no matter the user is known or not");
 	return 0;
 }
 
@@ -49,7 +55,21 @@ void signal_handler(int signum)
 		break;
 	}
 }
-
+static struct option long_option[] = {
+	{"client", no_argument, NULL, 'c'},
+	{"help", no_argument, NULL, 'h'},
+	{"server", no_argument, NULL, 's'},
+	{"address", required_argument, NULL, 'a'},
+	{"port", required_argument, NULL, 'p'},
+	{"genkey", no_argument, NULL, 'g'},
+	{"file", required_argument, NULL, 'f'},
+	{"user", required_argument, NULL, 'u'},
+	{"readonly", no_argument, NULL, 'r'},
+	{"ro", no_argument, NULL, 'r'},
+	{"write", no_argument, NULL, 'w'},
+	{"always-write", no_argument, NULL, 'W'},
+	{NULL, 0, NULL, 0},
+};
 int main(int argc, char *argv[])
 {
 	enum r_mode r = CLIENT;
@@ -59,7 +79,10 @@ int main(int argc, char *argv[])
 	const char *key_file = NULL;
 	const char *username = NULL;
 	int port;
-	while ((c = getopt(argc, argv, "chsa:p:gf:tu:")) != -1) {
+
+	int long_option_code;
+	while ((c = getopt_long(argc, argv, "chsa:p:gf:u:rwW",
+					long_option, &long_option_code)) != -1) {
 		switch (c) {
 		case 'c':
 			r = CLIENT;
@@ -85,8 +108,18 @@ int main(int argc, char *argv[])
 		case 'u':
 			username = optarg;
 			break;
+		case 'r':
+			key_mode = READONLY;
+			break;
+		case 'w':
+			key_mode = NEW_INSERT;
+			break;
+		case 'W':
+			key_mode = NEW_REPLACE;
+			break;
 		case '\?':
 			puts("Error while reading arguments");
+			print_help();
 			return -1;
 		default:
 			return -1;
@@ -113,6 +146,7 @@ int main(int argc, char *argv[])
 
 	if (key_file == NULL) {
 		puts("Please specify key file");
+		print_help();
 		return -1;
 	}
 	// Get our keypair
@@ -142,10 +176,12 @@ int main(int argc, char *argv[])
 	} else if (r == CLIENT) {
 		if (username == NULL) {
 			puts("Please specify username");
+			print_help();
 			return -1;
 		}
 		if (ip_addr == NULL) {
 			puts("Please specify ip address or hostname");
+			print_help();
 			return -1;
 		}
 		tui_client(username, ip_addr);

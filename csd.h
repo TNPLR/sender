@@ -40,6 +40,8 @@
 
 #define MAGIC_BUF_SIZE 9
 
+#define VERSION "0.1"
+
 // inline function htonq and ntohq
 static inline uint64_t htonq(uint64_t hostquad)
 {
@@ -78,9 +80,10 @@ struct connect_pack {
 	char ch[];
 };
 
+#define USERNAME_MAX_LEN 32
 struct message {
 	uint32_t msg_num;
-	char username[24];
+	char username[USERNAME_MAX_LEN];
 	time_t tm;
 	size_t msg_size;
 	char s[];
@@ -90,6 +93,9 @@ struct message {
 extern const char recv_magic[MAGIC_BUF_SIZE];
 extern const char send_magic[MAGIC_BUF_SIZE];
 extern const char message_done[MAGIC_BUF_SIZE];
+extern enum pubkey_mode {
+	NEW_REPLACE, NEW_INSERT, READONLY,
+} key_mode;
 extern gcry_sexp_t pubk;
 extern gcry_sexp_t privk;
 

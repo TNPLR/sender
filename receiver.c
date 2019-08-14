@@ -7,10 +7,11 @@
 
 static GDBM_FILE gdbm_data;
 static GDBM_FILE gdbm_key;
+enum pubkey_mode key_mode = READONLY;
 
 static int init_msg_gdbm(void)
 {
-	gdbm_data = gdbm_open("data.mdg", 0, GDBM_NEWDB, O_RDWR | O_CREAT | O_TRUNC, NULL);
+	gdbm_data = gdbm_open("data.mdg", 1, GDBM_WRCREAT, 0600, NULL);
 	if (gdbm_data == NULL) {
 		printf("Cannot create data base: gdbm: %s\n", gdbm_strerror(gdbm_errno));
 		return -1;
@@ -20,7 +21,7 @@ static int init_msg_gdbm(void)
 
 static int init_key_gdbm(void)
 {
-	gdbm_key = gdbm_open("key.mdg", 0, GDBM_NEWDB, O_RDWR | O_CREAT | O_TRUNC, NULL);
+	gdbm_key = gdbm_open("key.mdg", 0, GDBM_WRCREAT, 0600, NULL);
 	if (gdbm_key == NULL) {
 		printf("Cannot create data base: gdbm: %s\n", gdbm_strerror(gdbm_errno));
 		return -1;
@@ -47,12 +48,27 @@ static int store_key(char *name, size_t name_len, gcry_sexp_t pubkey)
 	key_datum.dsize = name_len;
 
 	data_datum.dsize = get_arr_from_sexp((void **)&data_datum.dptr, pubkey);
-
-	if (gdbm_store(gdbm_key, key_datum, data_datum, GDBM_REPLACE)) {
-		free(data_datum.dptr);
-		puts("Cannot store data");
+	if (!data_datum.dsize) {
+		puts("Cannot get arr from sexp");
 		return -1;
 	}
+
+	if (key_mode == NEW_REPLACE) {
+		if (gdbm_store(gdbm_key, key_datum, data_datum, GDBM_REPLACE)) {
+			free(data_datum.dptr);
+			printf("Replace mode Cannot store data %s\n", gdbm_strerror(gdbm_errno));
+			return -1;
+		}
+	} else if (key_mode == NEW_INSERT) {
+		if (gdbm_store(gdbm_key, key_datum, data_datum, GDBM_INSERT)) {
+			free(data_datum.dptr);
+			printf("Insert mode Cannot store data %s\n", gdbm_strerror(gdbm_errno));
+			return -1;
+		}
+	} else {
+		assert(0);
+	}
+
 	gdbm_sync(gdbm_key);
 	free(data_datum.dptr);
 	return 0;
@@ -76,6 +92,37 @@ static int store_msg(struct message *m)
 	gdbm_sync(gdbm_data);
 	return 0;
 }
+
+static int compare_key(gcry_sexp_t pub_key, char *name, size_t name_len)
+{
+	datum key_datum;
+	datum data_datum;
+
+	key_datum.dptr = name;
+	key_datum.dsize = name_len;
+	data_datum = gdbm_fetch(gdbm_key, key_datum);
+	if (data_datum.dptr == NULL) {
+		printf("Cannot fetch data: gdbm: %s\n", gdbm_strerror(gdbm_errno));
+		return -1;
+	}
+
+	void *ptr;
+
+	if (get_arr_from_sexp(&ptr, pub_key) != (size_t)data_datum.dsize) {
+		puts("Key not correct");
+		return -1;
+	}
+
+	if (memcmp(ptr, data_datum.dptr, data_datum.dsize)) {
+		free(ptr);
+		puts("Key not correct");
+		return -1;
+	}
+	free(ptr);
+	free(data_datum.dptr);
+	return 0;
+}
+
 
 static int fetch_key(gcry_sexp_t *pub_key, char *name, size_t name_len)
 {
@@ -161,7 +208,7 @@ static int send_server_msg(gcry_sexp_t pub_key, int socketfd)
 	return 0;
 }
 
-static int add_server_msg(int socketfd, gcry_sexp_t pubk)
+static int add_server_msg(int socketfd, gcry_sexp_t pubk, const char *username)
 {
 	gdbm_count_t server_msg_count;
 	if (gdbm_count(gdbm_data, &server_msg_count)) {
@@ -180,6 +227,7 @@ static int add_server_msg(int socketfd, gcry_sexp_t pubk)
 	m->msg_num = server_msg_count + 1;
 	m->tm = time(NULL);
 	m->msg_size = plain_size;
+	memcpy(m->username, username, USERNAME_MAX_LEN);
 	memcpy(m->s, plain, plain_size);
 	store_msg(m);
 	free(m);
@@ -204,30 +252,66 @@ static int handler(int socketfd)
 	if (recvall(socketfd, buf, sizeof recv_magic, 0)) {
 		serverlog("Cannot receive magic packet");
 		ret_val = 1;
-		goto cleanup;
+		goto ret;
 	}
 
 	if (memcmp(recv_magic, buf, sizeof recv_magic)) {
 		serverlog("Recv magic not correct");
 		ret_val = 2;
-		goto cleanup;
+		goto ret;
 	}
 
 	if (sendall(socketfd, send_magic, sizeof send_magic, 0)) {
 		serverlog("Cannot send Send magic");
 		ret_val = 3;
-		goto cleanup;
+		goto ret;
 	}
 
 	if (send_rsa_key(socketfd, pubk)) {
 		serverlog("Cannot send rsa key");
 		ret_val = 4;
-		goto cleanup;
+		goto ret;
 	}
 
 	if (recv_rsa_key(socketfd, &pub_key)) {
 		ret_val = 4;
+		goto ret;
+	}
+
+	void *username;
+	size_t sz;
+	if (!(sz = receive_and_decrypt(socketfd, pub_key, privk, &username))) {
+		serverlog("Cannot receive name");
+		ret_val = 8;
+		goto pubk_cleanup;
+	}
+
+	if (sz != USERNAME_MAX_LEN) {
+		serverlog("Username not correct");
+		ret_val = 9;
 		goto cleanup;
+	}
+	
+	if (((char *)username)[31] != '\0') {
+		serverlog("Username not zero-term string");
+		ret_val = 9;
+		goto cleanup;
+	}
+
+	if (key_mode == READONLY) {
+		if (compare_key(pub_key, username, USERNAME_MAX_LEN)) {
+			serverlog("Public key not correct");
+			ret_val = 9;
+			goto cleanup;
+		}
+	} else {
+		if (compare_key(pub_key, username, USERNAME_MAX_LEN)) {
+			if (store_key(username, sz, pub_key)) {
+				serverlog("Cannot store public key");
+				ret_val = 9;
+				goto cleanup;
+			}
+		}
 	}
 
 	gcry_randomize(buf, 64, GCRY_VERY_STRONG_RANDOM);
@@ -238,7 +322,6 @@ static int handler(int socketfd)
 	}
 
 	void *back;
-	size_t sz;
 	if (!(sz = receive_and_decrypt(socketfd, pub_key, privk, &back))) {
 		serverlog("Cannot receive random message");
 		ret_val = 8;
@@ -246,10 +329,12 @@ static int handler(int socketfd)
 	}
 
 	if (sz != 64 || memcmp(buf, back, 64)) {
+		gcry_free(back);
 		serverlog("Message wrong");
 		ret_val = 8;
 		goto cleanup;
 	}
+	gcry_free(back);
 
 	while (1) {
 		// Check Request type
@@ -268,7 +353,7 @@ static int handler(int socketfd)
 			break;
 		case SEND_MSG:
 			serverlog("SEND_MSG");
-			add_server_msg(socketfd, pub_key);
+			add_server_msg(socketfd, pub_key, username);
 			break;
 		case END_OF_CMD:
 			ret_val = 0;
@@ -276,10 +361,13 @@ static int handler(int socketfd)
 		}
 	}
 
+
 cleanup:
-	serverlog("Disconnect");
+	gcry_free(username);
+pubk_cleanup:
 	gcry_sexp_release(pub_key);
-	gcry_free(back);
+	serverlog("Disconnect");
+ret:
 	shutdown(socketfd, 2);
 	return ret_val;
 }
@@ -289,6 +377,7 @@ static void clean_addrinfo(void)
 {
 	freeaddrinfo(server);
 }
+
 int receiver(void)
 {
 	if (init_msg_gdbm()) {
@@ -296,6 +385,15 @@ int receiver(void)
 	}
 
 	if (atexit(close_msg_gdbm)) {
+		puts("Cannot load exit function");
+		return -1;
+	}
+
+	if (init_key_gdbm()) {
+		return -1;
+	}
+
+	if (atexit(close_key_gdbm)) {
 		puts("Cannot load exit function");
 		return -1;
 	}

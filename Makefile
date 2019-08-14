@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-ggdb -Wall -Wextra -fstack-protector-strong \
+CFLAGS=-ggdb -Wall -Wextra -fstack-protector-all -flto -fPIE\
        `pkg-config --cflags --libs ncurses` -lpthread -lgcrypt -lgdbm
 .PHONY: all clean
 all: main

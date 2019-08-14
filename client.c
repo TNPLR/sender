@@ -36,7 +36,9 @@ static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, in
 		char buffer[64];
 		++message_count;
 		strftime(buffer, 64, "%Ec", localtime(&((struct message *)plain)->tm));
-		mvwprintw(win, y, 0, "[%s] %s", buffer, ((struct message *)plain)->s);
+		mvwprintw(win, y, 0, "[%s] from %s\n%s", buffer,
+				((struct message *)plain)->username,
+				((struct message *)plain)->s);
 		y += 3;
 		gcry_free(plain);
 	}
@@ -106,6 +108,22 @@ static int client_protocol(const char *username, const char *saddr, gcry_sexp_t 
 		return -1;
 	}
 
+	if (strlen(username) >= USERNAME_MAX_LEN) {
+		puts("Username too long");
+		return -1;
+	}
+
+	char *username_ptr = calloc(1, USERNAME_MAX_LEN);
+
+	strcpy(username_ptr, username);
+
+	if (encrypt_and_send(socketfd, *pub_key, privk, username_ptr, USERNAME_MAX_LEN)) {
+		free(username_ptr);
+		puts("Cannot send username");
+		return -1;
+	}
+	free(username_ptr);
+
 	void *rand_msg;
 	size_t sz;
 	if (!(sz = receive_and_decrypt(socketfd, *pub_key, privk, &rand_msg))) {
@@ -114,6 +132,7 @@ static int client_protocol(const char *username, const char *saddr, gcry_sexp_t 
 	}
 
 	if (encrypt_and_send(socketfd, *pub_key, privk, rand_msg, sz)) {
+		gcry_free(rand_msg);
 		puts("Cannot send back random message");
 		return -1;
 	}
