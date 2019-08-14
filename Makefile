@@ -3,7 +3,7 @@ CFLAGS=-ggdb -Wall -Wextra -fstack-protector-all -flto -fPIE\
        `pkg-config --cflags --libs ncurses` -lpthread -lgcrypt -lgdbm
 .PHONY: all clean
 all: main
-main: client.o main.o receiver.o util.o
+main: client.o main.o receiver.o util.o aes.o
 	${CC} ${CFLAGS} $^ -o $@
 
 %.o: %.c

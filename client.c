@@ -28,18 +28,18 @@ static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, in
 		}
 
 		//append_list(length, plain);
-		if (y + 3 > maxy - 5) {
-			wscrl(win, 3);
-			y -= 3;
+		if (y + 4 > maxy - 5) {
+			wscrl(win, 4);
+			y -= 4;
 		}
 
 		char buffer[64];
 		++message_count;
 		strftime(buffer, 64, "%Ec", localtime(&((struct message *)plain)->tm));
-		mvwprintw(win, y, 0, "[%s] from %s\n%s", buffer,
+		mvwprintw(win, y, 0, "[%s] %s\n\t%s", buffer,
 				((struct message *)plain)->username,
 				((struct message *)plain)->s);
-		y += 3;
+		y += 4;
 		gcry_free(plain);
 	}
 	wrefresh(win);

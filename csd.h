@@ -73,7 +73,14 @@ enum server_rq {
 enum connect_pack_attr {
 	NONE
 };
-struct connect_pack {
+struct connect_aes_pack {
+	char iv[16];
+	alignas(8) size_t buffer_size;
+	alignas(8) size_t hmac_size;
+	alignas(4) uint32_t attribute;
+	char ch[];
+};
+struct connect_rsa_pack {
 	alignas(8) size_t buffer_size;
 	alignas(8) size_t signature_size;
 	alignas(4) uint32_t attribute;
@@ -115,6 +122,12 @@ size_t receive_and_decrypt(int socketfd, gcry_sexp_t pub_key,
 		gcry_sexp_t priv_key, void **plain);
 int encrypt_and_send(int socketfd, gcry_sexp_t pub_key, gcry_sexp_t priv_key,
 		const void *s, size_t msg_size);
+
+// aes.c
+int aes_encrypt_and_send(int socketfd, const char *key, size_t key_size,
+		const void *s, size_t msg_size);
+size_t aes_receive_and_decrypt(int socketfd, void *key,
+		size_t key_size, void **plain);
 
 // receiver.c
 int receiver(void);

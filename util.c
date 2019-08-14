@@ -433,7 +433,7 @@ size_t receive_and_decrypt(int socketfd, gcry_sexp_t pub_key,
 		gcry_sexp_t priv_key, void **plain)
 {
 	size_t msg_size;
-	struct connect_pack *pk;
+	struct connect_rsa_pack *pk;
 
 	msg_size = recv_pack(socketfd, (void *)&pk, 0);
 	if (msg_size == 0) {
@@ -469,8 +469,8 @@ int encrypt_and_send(int socketfd, gcry_sexp_t pub_key, gcry_sexp_t priv_key,
 	edata_size = encrypt_rsa_data(&edata, pub_key, s, msg_size);
 	sig_size = sign_rsa_data(&sig, priv_key, s, msg_size);
 
-	struct connect_pack *pk =
-		calloc(1, sizeof(struct connect_pack) + edata_size + sig_size);
+	struct connect_rsa_pack *pk =
+		calloc(1, sizeof(struct connect_rsa_pack) + edata_size + sig_size);
 	pk->buffer_size = edata_size;
 	pk->signature_size = sig_size;
 	pk->attribute = 0;
@@ -480,7 +480,7 @@ int encrypt_and_send(int socketfd, gcry_sexp_t pub_key, gcry_sexp_t priv_key,
 	printf("Encrypt Size %lu Sign size %lu\n", edata_size, sig_size);
 #endif
 
-	if (send_pack(socketfd, pk, sizeof(struct connect_pack) + edata_size + sig_size, 0) == 0) {
+	if (send_pack(socketfd, pk, sizeof(struct connect_rsa_pack) + edata_size + sig_size, 0) == 0) {
 		free(edata);
 		free(sig);
 		free(pk);
