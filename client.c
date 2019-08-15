@@ -181,7 +181,7 @@ static int message_proc(int socketfd, const void *key, WINDOW *win, int maxy)
 	return 0;
 }
 
-static int send_proc(const char *username, const char *saddr)
+static int send_proc(int socketfd, void *key)
 {
 	int maxy, maxx;
 	getmaxyx(stdscr, maxy, maxx);
@@ -199,16 +199,6 @@ static int send_proc(const char *username, const char *saddr)
 	int bf = 0;
 	int cur_y = 1, cur_x = 1;
 	refresh();
-
-	void *key;
-	int socketfd = client_protocol(username, saddr, &key);
-	if (socketfd == -1) {
-		puts("Cannot Protocol");
-		destroy_win(send_win);
-		destroy_win(message_win);
-		shutdown(socketfd, 2);
-		return 1;
-	}
 
 	// Initialize connection
 	enum server_rq rq;
@@ -295,6 +285,14 @@ static int send_proc(const char *username, const char *saddr)
 
 int tui_client(const char *username, const char *saddr)
 {
+	void *key;
+	int socketfd = client_protocol(username, saddr, &key);
+	if (socketfd == -1) {
+		puts("Cannot Protocol");
+		shutdown(socketfd, 2);
+		return 1;
+	}
+
 	setlocale(LC_ALL, "");
 	initscr();
 	raw();
@@ -302,7 +300,7 @@ int tui_client(const char *username, const char *saddr)
 
 	keypad(stdscr, TRUE);
 
-	send_proc(username, saddr);
+	send_proc(socketfd, key);
 
 	endwin();
 	return 0;
