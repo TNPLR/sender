@@ -1,12 +1,12 @@
 #include "csd.h"
 
 uintmax_t message_count;
-static int send_msg_to_server(int socketfd, gcry_sexp_t pub_key, const void *s, size_t msg_size)
+static int send_msg_to_server(int socketfd, const void *key, const void *s, size_t msg_size)
 {
-	return encrypt_and_send(socketfd, pub_key, privk, s, msg_size);
+	return aes_encrypt_and_send(socketfd, key, 32, s, msg_size);
 }
 
-static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, int maxy)
+static int receive_server_msg(int socketfd, const void *key, WINDOW *win, int maxy)
 {
 	int y = 0;
 
@@ -23,7 +23,7 @@ static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, in
 		void *plain;
 		size_t length;
 
-		if (!(length = receive_and_decrypt(socketfd, pub_key, privk, &plain))) {
+		if (!(length = aes_receive_and_decrypt(socketfd, key, 32, &plain))) {
 			break;
 		}
 
@@ -40,7 +40,7 @@ static int receive_server_msg(int socketfd, gcry_sexp_t pub_key, WINDOW *win, in
 				((struct message *)plain)->username,
 				((struct message *)plain)->s);
 		y += 4;
-		gcry_free(plain);
+		free(plain);
 	}
 	wrefresh(win);
 	return 0;
@@ -52,7 +52,7 @@ static void clean_addrinfo(void)
 {
 	freeaddrinfo(server_addr);
 }
-static int client_protocol(const char *username, const char *saddr, gcry_sexp_t *pub_key)
+static int client_protocol(const char *username, const char *saddr, void **key)
 {
 	struct addrinfo hints = {0};
 	hints.ai_family = AF_UNSPEC;
@@ -98,18 +98,21 @@ static int client_protocol(const char *username, const char *saddr, gcry_sexp_t 
 		return -1;
 	}
 
-	if (recv_rsa_key(socketfd, pub_key)) {
+	gcry_sexp_t pub_key;
+	if (recv_rsa_key(socketfd, &pub_key)) {
 		puts("Cannot get rsa key");
 		return -1;
 	}
 
 	if (send_rsa_key(socketfd, pubk)) {
 		puts("Cannot send rsa key");
+		gcry_sexp_release(pub_key);
 		return -1;
 	}
 
 	if (strlen(username) >= USERNAME_MAX_LEN) {
 		puts("Username too long");
+		gcry_sexp_release(pub_key);
 		return -1;
 	}
 
@@ -117,8 +120,9 @@ static int client_protocol(const char *username, const char *saddr, gcry_sexp_t 
 
 	strcpy(username_ptr, username);
 
-	if (encrypt_and_send(socketfd, *pub_key, privk, username_ptr, USERNAME_MAX_LEN)) {
+	if (encrypt_and_send(socketfd, pub_key, privk, username_ptr, USERNAME_MAX_LEN)) {
 		free(username_ptr);
+		gcry_sexp_release(pub_key);
 		puts("Cannot send username");
 		return -1;
 	}
@@ -126,16 +130,25 @@ static int client_protocol(const char *username, const char *saddr, gcry_sexp_t 
 
 	void *rand_msg;
 	size_t sz;
-	if (!(sz = receive_and_decrypt(socketfd, *pub_key, privk, &rand_msg))) {
+	if (!(sz = receive_and_decrypt(socketfd, pub_key, privk, &rand_msg))) {
 		puts("Cannot receive random message");
+		gcry_sexp_release(pub_key);
 		return -1;
 	}
 
-	if (encrypt_and_send(socketfd, *pub_key, privk, rand_msg, sz)) {
+	if (encrypt_and_send(socketfd, pub_key, privk, rand_msg, sz)) {
 		gcry_free(rand_msg);
+		gcry_sexp_release(pub_key);
 		puts("Cannot send back random message");
 		return -1;
 	}
+
+	if (!(sz = receive_and_decrypt(socketfd, pub_key, privk, key))) {
+		gcry_sexp_release(pub_key);
+		puts("Cannot receive AES key");
+		return -1;
+	}
+	gcry_sexp_release(pub_key);
 
 	gcry_free(rand_msg);
 	return socketfd;
@@ -155,14 +168,7 @@ static void destroy_win(WINDOW *local_win)
 	delwin(local_win);
 }
 
-static gcry_sexp_t pub_key;
-
-static void cleanup_key(void)
-{
-	gcry_sexp_release(pub_key);
-}
-
-static int message_proc(int socketfd, gcry_sexp_t pub_key, WINDOW *win, int maxy)
+static int message_proc(int socketfd, const void *key, WINDOW *win, int maxy)
 {
 	enum server_rq rq = GET_MSG;
 
@@ -170,7 +176,7 @@ static int message_proc(int socketfd, gcry_sexp_t pub_key, WINDOW *win, int maxy
 		puts("Cannot send GET_MSG");
 		return 1;
 	}
-	receive_server_msg(socketfd, pub_key, win, maxy);
+	receive_server_msg(socketfd, key, win, maxy);
 
 	return 0;
 }
@@ -194,7 +200,8 @@ static int send_proc(const char *username, const char *saddr)
 	int cur_y = 1, cur_x = 1;
 	refresh();
 
-	int socketfd = client_protocol(username, saddr, &pub_key);
+	void *key;
+	int socketfd = client_protocol(username, saddr, &key);
 	if (socketfd == -1) {
 		puts("Cannot Protocol");
 		destroy_win(send_win);
@@ -206,7 +213,7 @@ static int send_proc(const char *username, const char *saddr)
 	// Initialize connection
 	enum server_rq rq;
 
-	message_proc(socketfd, pub_key, message_win, maxy);
+	message_proc(socketfd, key, message_win, maxy);
 	while (1) {
 		wmove(send_win, cur_y, cur_x);
 		wrefresh(send_win);
@@ -228,7 +235,7 @@ static int send_proc(const char *username, const char *saddr)
 			shutdown(socketfd, 2);
 			return 0;
 		case KEY_F(5):
-			message_proc(socketfd, pub_key, message_win, maxy);
+			message_proc(socketfd, key, message_win, maxy);
 			break;
 		case '\r':
 		case '\n':
@@ -242,13 +249,13 @@ static int send_proc(const char *username, const char *saddr)
 				return 1;
 			}
 			buffer[bf++] = '\0';
-			send_msg_to_server(socketfd, pub_key, buffer, bf);
+			send_msg_to_server(socketfd, key, buffer, bf);
 			wclear(send_win);
 			wborder(send_win, '|', '|', '-','-','+','+','+','+');
 			cur_y = 1;
 			cur_x = 1;
 			bf = 0;
-			message_proc(socketfd, pub_key, message_win, maxy);
+			message_proc(socketfd, key, message_win, maxy);
 			break;
 		case '\b':
 		case KEY_BACKSPACE:
@@ -288,8 +295,6 @@ static int send_proc(const char *username, const char *saddr)
 
 int tui_client(const char *username, const char *saddr)
 {
-	atexit(cleanup_key);
-
 	setlocale(LC_ALL, "");
 	initscr();
 	raw();

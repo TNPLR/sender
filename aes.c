@@ -26,6 +26,10 @@ static size_t decrypt_aes_data(const void *key, size_t key_len,
 
 	err = gcry_cipher_decrypt(hd, (unsigned char *)s, msg_len, NULL, 0);
 	gcry_cipher_close(hd);
+	if (err) {
+		puts("Cannot decrypt AES");
+		return 0;
+	}
 	return msg_len;
 }
 
@@ -54,12 +58,11 @@ static size_t encrypt_aes_data(const void *key, size_t key_len,
 	}
 
 	err = gcry_cipher_encrypt(hd, (unsigned char *)s, msg_len, NULL, 0);
+	gcry_cipher_close(hd);
 	if (err) {
 		puts("Cannot encrypt AES");
 		return 0;
 	}
-
-	gcry_cipher_close(hd);
 	return msg_len;
 }
 
@@ -138,7 +141,7 @@ static size_t get_hmac_data(void **ptr, const void *key, size_t key_len,
 	return buffer_size;
 }
 
-size_t aes_receive_and_decrypt(int socketfd, void *key,
+size_t aes_receive_and_decrypt(int socketfd, const void *key,
 		size_t key_size, void **plain)
 {
 	size_t msg_size;
@@ -162,7 +165,6 @@ size_t aes_receive_and_decrypt(int socketfd, void *key,
 				pk->hmac_size, key, key_size,
 				pk->ch, pk->buffer_size)) {
 		puts("Message signature not correct");
-		gcry_free(*plain);
 		free(pk);
 		return 0;
 	}
@@ -177,7 +179,7 @@ size_t aes_receive_and_decrypt(int socketfd, void *key,
 	return plain_size;
 }
 
-int aes_encrypt_and_send(int socketfd, const char *key, size_t key_size,
+int aes_encrypt_and_send(int socketfd, const void *key, size_t key_size,
 		const void *s, size_t msg_size)
 {
 	void *sig;
@@ -186,14 +188,15 @@ int aes_encrypt_and_send(int socketfd, const char *key, size_t key_size,
 	gcry_randomize(iv, sizeof iv, GCRY_VERY_STRONG_RANDOM);
 
 	size_t edata_size = (msg_size & ~0xF) + ((!!(msg_size & 0xF)) << 4);
+	assert(edata_size >= msg_size);
 	size_t sig_size;
 	void *edata = calloc(1, edata_size);
-	memcpy(edata, s, edata_size);
+	memcpy(edata, s, msg_size);
 	sig_size = get_hmac_data(&sig, key, key_size, edata, edata_size);
 	edata_size = encrypt_aes_data(key, key_size, iv, sizeof iv, edata, edata_size);
 
 	struct connect_aes_pack *pk =
-		calloc(1, sizeof(struct connect_rsa_pack) + edata_size + sig_size);
+		calloc(1, sizeof(struct connect_aes_pack) + edata_size + sig_size);
 	pk->buffer_size = edata_size;
 	pk->hmac_size = sig_size;
 	pk->attribute = 0;
@@ -217,3 +220,18 @@ int aes_encrypt_and_send(int socketfd, const char *key, size_t key_size,
 	free(pk);
 	return 0;
 }
+
+#if 0
+int main()
+{
+	char key[32];
+	char iv[16];
+	char data[16] = "I love you!!!!!";
+	puts(data);
+	gcry_randomize(key, sizeof key, GCRY_VERY_STRONG_RANDOM);
+	gcry_randomize(iv, sizeof iv, GCRY_VERY_STRONG_RANDOM);
+	encrypt_aes_data(key, sizeof key, iv, sizeof iv, data, sizeof data);
+	decrypt_aes_data(key, sizeof key, iv, sizeof iv, data, sizeof data);
+	puts(data);
+}
+#endif

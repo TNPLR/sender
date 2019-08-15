@@ -173,7 +173,7 @@ static void serverlog(const char *msg)
 	printf("[%s] %s\n", buffer, msg);
 }
 
-static int send_server_msg(gcry_sexp_t pub_key, int socketfd)
+static int send_server_msg(const void *key, int socketfd)
 {
 	uint32_t count = 8;
 	gdbm_count_t server_msg_count;
@@ -200,7 +200,7 @@ static int send_server_msg(gcry_sexp_t pub_key, int socketfd)
 #if DEBUG == 2
 		printf("%s:%d\n", msg->s, buffer.dsize);
 #endif
-		encrypt_and_send(socketfd, pub_key, privk, buffer.dptr, buffer.dsize);
+		aes_encrypt_and_send(socketfd, key, 32, buffer.dptr, buffer.dsize);
 
 		free(buffer.dptr);
 	}
@@ -208,7 +208,7 @@ static int send_server_msg(gcry_sexp_t pub_key, int socketfd)
 	return 0;
 }
 
-static int add_server_msg(int socketfd, gcry_sexp_t pubk, const char *username)
+static int add_server_msg(int socketfd, const void *key, const char *username)
 {
 	gdbm_count_t server_msg_count;
 	if (gdbm_count(gdbm_data, &server_msg_count)) {
@@ -217,7 +217,7 @@ static int add_server_msg(int socketfd, gcry_sexp_t pubk, const char *username)
 	}
 
 	void *plain;
-	size_t plain_size = receive_and_decrypt(socketfd, pubk, privk, &plain);
+	size_t plain_size = aes_receive_and_decrypt(socketfd, key, 32, &plain);
 	if (plain_size == 0) {
 		serverlog("Cannot receive or decrypt");
 		return -1;
@@ -233,7 +233,7 @@ static int add_server_msg(int socketfd, gcry_sexp_t pubk, const char *username)
 	free(m);
 
 	serverlog(plain);
-	gcry_free(plain);
+	free(plain);
 	return 0;
 }
 /*
@@ -336,6 +336,14 @@ static int handler(int socketfd)
 	}
 	gcry_free(back);
 
+	char aes_key[32];
+	gcry_randomize(aes_key, sizeof aes_key, GCRY_VERY_STRONG_RANDOM);
+	if (encrypt_and_send(socketfd, pub_key, privk, aes_key, sizeof aes_key)) {
+		serverlog("Cannot send AES key");
+		ret_val = 8;
+		goto cleanup;
+	}
+
 	while (1) {
 		// Check Request type
 		enum server_rq rq;
@@ -349,11 +357,11 @@ static int handler(int socketfd)
 		switch (rq) {
 		case GET_MSG:
 			serverlog("GET_MSG");
-			send_server_msg(pub_key, socketfd);
+			send_server_msg(aes_key, socketfd);
 			break;
 		case SEND_MSG:
 			serverlog("SEND_MSG");
-			add_server_msg(socketfd, pub_key, username);
+			add_server_msg(socketfd, aes_key, username);
 			break;
 		case END_OF_CMD:
 			ret_val = 0;

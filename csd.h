@@ -124,9 +124,9 @@ int encrypt_and_send(int socketfd, gcry_sexp_t pub_key, gcry_sexp_t priv_key,
 		const void *s, size_t msg_size);
 
 // aes.c
-int aes_encrypt_and_send(int socketfd, const char *key, size_t key_size,
+int aes_encrypt_and_send(int socketfd, const void *key, size_t key_size,
 		const void *s, size_t msg_size);
-size_t aes_receive_and_decrypt(int socketfd, void *key,
+size_t aes_receive_and_decrypt(int socketfd, const void *key,
 		size_t key_size, void **plain);
 
 // receiver.c
